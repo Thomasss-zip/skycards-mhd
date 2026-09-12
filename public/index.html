@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skycards MHD - Hra</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #121212; color: #fff; }
+    #map { width: 100%; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+
+    .top-panel {
+      position: absolute; top: 15px; left: 15px; z-index: 1000;
+      background: rgba(20, 20, 25, 0.9); backdrop-filter: blur(8px);
+      padding: 12px 20px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .top-panel h1 { font-size: 1.2rem; margin-bottom: 4px; color: #4facfe; }
+
+    .inventory-panel {
+      position: absolute; top: 15px; right: 15px; z-index: 1000;
+      background: rgba(20, 20, 25, 0.9); backdrop-filter: blur(8px);
+      padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1);
+      width: 280px; max-height: 80vh; overflow-y: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+    .inventory-panel h2 { font-size: 1rem; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 5px; }
+    .card-list { display: flex; flex-direction: column; gap: 8px; }
+    .card-item {
+      background: #2a2a35; padding: 10px 12px; border-radius: 8px;
+      display: flex; flex-direction: column; gap: 4px;
+      border-left: 4px solid #4facfe; font-size: 0.85rem;
+    }
+    .card-item a { color: #00f2fe; text-decoration: none; font-weight: bold; margin-top: 4px; display: inline-block; }
+    .card-item a:hover { text-decoration: underline; }
+
+    .vehicle-marker {
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 50%; color: white; font-weight: bold; font-size: 11px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5); border: 2px solid white;
+    }
+    .marker-bus { background: #f39c12; }
+    .marker-tram { background: #e74c3c; }
+    .marker-metro { background: #2ecc71; }
+    .marker-train { background: #3498db; }
+    .marker-other { background: #9b59b6; }
+    .has-delay { animation: pulse 1.5s infinite; }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7); }
+      70% { box-shadow: 0 0 0 10px rgba(231, 76, 60, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
+    }
+
+    .leaflet-popup-content-wrapper { background: #1e1e24; color: #fff; border-radius: 10px; }
+    .leaflet-popup-tip { background: #1e1e24; }
+    .popup-btn {
+      margin-top: 10px; width: 100%; padding: 8px; border: none; border-radius: 6px;
+      background: #4facfe; color: white; font-weight: bold; cursor: pointer;
+    }
+    .popup-btn:disabled { background: #555; cursor: not-allowed; }
+    .photo-link { display: block; margin-top: 8px; color: #00f2fe; text-decoration: none; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+
+  <div class="top-panel">
+    <h1>Skycards MHD</h1>
+    <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
+  </div>
+
+  <div class="inventory-panel">
+    <h2>Album karet (<span id="card-count">0</span>)</h2>
+    <div class="card-list" id="inventory-list">
+      <div style="color: #888; font-size: 0.85rem;">Načítám album...</div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    let userId = localStorage.getItem('skycards_user_id');
+    if (!userId) {
+      userId = 'user_' + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('skycards_user_id', userId);
+    }
+
+    const VISIBLE_RADIUS = 100000;
+    const CATCH_RADIUS = 50000;
+
+    const map = L.map('map').setView([50.087, 14.421], 8);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let markers = {};
+    let caughtCards = [];
+    let userCoords = null;
+    let userMarker = null;
+    let visibleCircle = null;
+    let catchCircle = null;
+
+    function updateUserPosition(lat, lng) {
+      userCoords = { lat, lng };
+
+      if (!userMarker) {
+        userMarker = L.circleMarker([lat, lng], {
+          radius: 8, fillColor: '#00f2fe', color: '#fff', weight: 3, fillOpacity: 1
+        }).addTo(map).bindPopup("<b>Tvoje poloha</b>");
+
+        visibleCircle = L.circle([lat, lng], {
+          radius: VISIBLE_RADIUS, color: '#4facfe', fillColor: '#4facfe', fillOpacity: 0.05, weight: 1.5, dashArray: '6, 6'
+        }).addTo(map);
+
+        catchCircle = L.circle([lat, lng], {
+          radius: CATCH_RADIUS, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 0.1, weight: 2
+        }).addTo(map);
+
+        map.setView([lat, lng], 8);
+      } else {
+        userMarker.setLatLng([lat, lng]);
+        visibleCircle.setLatLng([lat, lng]);
+        catchCircle.setLatLng([lat, lng]);
+      }
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        pos => updateUserPosition(pos.coords.latitude, pos.coords.longitude),
+        err => console.log('Geolokace nedostupná.')
+      );
+    }
+
+    function getMarkerClass(type) {
+      const t = (type || '').toLowerCase();
+      if (t.includes('vlak') || t.includes('train')) return 'marker-train';
+      if (t.includes('autobus') || t.includes('bus')) return 'marker-bus';
+      if (t.includes('tram')) return 'marker-tram';
+      if (t.includes('metro')) return 'marker-metro';
+      return 'marker-other';
+    }
+
+    async function loadSavedCards() {
+      try {
+        const res = await fetch(`/api/cards/${userId}`);
+        caughtCards = await res.json();
+        updateInventory();
+      } catch (err) {
+        console.error('Chyba DB:', err);
+      }
+    }
+
+    async function loadVehicles() {
+      try {
+        let url = '/api/vehicles';
+        if (userCoords) url += `?lat=${userCoords.lat}&lng=${userCoords.lng}&radius=${VISIBLE_RADIUS}`;
+
+        const res = await fetch(url);
+        const vehicles = await res.json();
+
+        document.getElementById('veh-count').innerText = vehicles.length;
+
+        const currentIds = new Set(vehicles.map(v => v.id));
+        Object.keys(markers).forEach(id => {
+          if (!currentIds.has(id)) {
+            map.removeLayer(markers[id]);
+            delete markers[id];
+          }
+        });
+
+        vehicles.forEach(v => {
+          const markerClass = getMarkerClass(v.type);
+          const delayClass = v.delay > 3 ? 'has-delay' : '';
+
+          const icon = L.divIcon({
+            className: `vehicle-marker ${markerClass} ${delayClass}`,
+            html: `<span>${v.line}</span>`,
+            iconSize: [28, 28]
+          });
+
+          const distKm = v.distanceMeters !== null ? (v.distanceMeters / 1000).toFixed(1) : null;
+          
+          // Kontrola, zda už stejné evidenční číslo v albu existuje
+          const isAlreadyCaught = caughtCards.some(c => c.reg_number === v.regNum);
+
+          const popupContent = `
+            <div style="text-align: center;">
+              <h3>Linka ${v.line}</h3>
+              <p><b>Typ:</b> ${v.type}</p>
+              <p><b>Ev. číslo / ID:</b> ${v.regNum}</p>
+              <p><b>Cíl:</b> ${v.destination}</p>
+              <p><b>Zpoždění:</b> ${v.delay !== null ? v.delay + ' min' : 'Neznámé'}</p>
+              ${distKm !== null ? `<p><b>Vzdálenost:</b> ${distKm} km</p>` : ''}
+              ${v.photoUrl ? `<a href="${v.photoUrl}" target="_blank" class="photo-link">📷 Zobrazit fotogalerii</a>` : ''}
+              <button class="popup-btn" ${!v.canCatch || isAlreadyCaught ? 'disabled' : ''} 
+                onclick="catchVehicle('${v.id}', '${v.line}', '${v.type}', '${v.regNum}', '${v.destination}', '${v.photoUrl || ''}')">
+                ${isAlreadyCaught ? '✅ UŽ MÁŠ V ALBUMU' : (v.canCatch ? '🎴 CHYTIT KARTU' : '🔒 MOC DALEKO')}
+              </button>
+            </div>
+          `;
+
+          if (markers[v.id]) {
+            markers[v.id].setLatLng([v.lat, v.lng]).setIcon(icon).setPopupContent(popupContent);
+          } else {
+            markers[v.id] = L.marker([v.lat, v.lng], { icon }).addTo(map).bindPopup(popupContent);
+          }
+        });
+      } catch (err) {
+        console.error('Chyba načítání dat:', err);
+      }
+    }
+
+    window.catchVehicle = async function(id, line, type, regNum, destination, photoUrl) {
+      try {
+        const res = await fetch('/api/cards', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, userId, line, type, regNum, destination, photoUrl })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          alert(`🎉 Úspěšně jsi ulovil kartu linky ${line} (Ev.č. ${regNum})!`);
+          await loadSavedCards();
+          loadVehicles();
+        } else {
+          alert(`⚠️ ${data.error}`);
+        }
+      } catch (err) {
+        console.error('Chyba uložení:', err);
+      }
+    };
+
+    function updateInventory() {
+      const list = document.getElementById('inventory-list');
+      document.getElementById('card-count').innerText = caughtCards.length;
+
+      if (caughtCards.length === 0) {
+        list.innerHTML = '<div style="color: #888; font-size: 0.85rem;">Zatím nemáš žádnou kartu. Přibliž se k vozidlu na 50 km!</div>';
+        return;
+      }
+
+      list.innerHTML = caughtCards.map(c => `
+        <div class="card-item">
+          <div>
+            <strong>Linka ${c.line}</strong> <small style="color:#4facfe">(Ev.č. ${c.reg_number})</small><br>
+            <small style="color:#aaa">${c.type} • ${c.destination}</small>
+          </div>
+          ${c.photo_url ? `<a href="${c.photo_url}" target="_blank">📷 Fotogalerie vozidla</a>` : ''}
+        </div>
+      `).join('');
+    }
+
+    loadSavedCards();
+    loadVehicles();
+    setInterval(loadVehicles, 5000);
+  </script>
+</body>
+</html>
