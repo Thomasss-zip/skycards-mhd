@@ -34,7 +34,7 @@
     }
     .google-btn:hover { background: #f0f0f0; }
 
-    /* Modální okno pro výběr polohy / fallback */
+    /* Modální okno pro ruční polohu */
     #location-modal {
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
       background: rgba(12, 12, 16, 0.9); backdrop-filter: blur(8px);
@@ -68,6 +68,15 @@
     .logout-link { color: #ff5252; cursor: pointer; text-decoration: underline; }
     .gps-switch-link { color: #2ecc71; cursor: pointer; text-decoration: underline; }
 
+    /* Cooldown UI prvek – styl počítače/radaru */
+    .cooldown-panel {
+      margin-top: 8px; background: rgba(0, 0, 0, 0.4); padding: 6px 10px;
+      border-radius: 6px; font-size: 0.8rem; border: 1px solid rgba(255,255,255,0.08);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .cooldown-status-ready { color: #2ecc71; font-weight: bold; }
+    .cooldown-status-wait { color: #e74c3c; font-weight: bold; }
+
     .inventory-panel {
       position: absolute; top: 15px; right: 15px; z-index: 1000;
       background: rgba(20, 20, 25, 0.9); backdrop-filter: blur(8px);
@@ -83,24 +92,14 @@
       border-left: 4px solid #4facfe; font-size: 0.85rem;
     }
 
-    .vehicle-marker {
+    /* Tajemné emoji markery na mapě */
+    .vehicle-emoji-marker {
       display: flex; align-items: center; justify-content: center;
-      border-radius: 50%; color: white; font-weight: bold; font-size: 11px;
-      box-shadow: 0 0 10px rgba(0,0,0,0.5); border: 2px solid white;
+      font-size: 18px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6));
+      transition: transform 0.2s;
     }
-    .marker-bus { background: #f39c12; }
-    .marker-tram { background: #e74c3c; }
-    .marker-metro { background: #2ecc71; }
-    .marker-train { background: #3498db; }
-    .marker-other { background: #9b59b6; }
-    .marker-caught { background: #555555 !important; border-color: #888888 !important; opacity: 0.7; }
-    .has-delay { animation: pulse 1.5s infinite; }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7); }
-      70% { box-shadow: 0 0 0 10px rgba(231, 76, 60, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(231, 76, 60, 0); }
-    }
+    .vehicle-emoji-marker:hover { transform: scale(1.2); }
+    .marker-caught-emoji { opacity: 0.4; filter: grayscale(100%); }
 
     .leaflet-popup-content-wrapper { background: #1e1e24; color: #fff; border-radius: 10px; }
     .leaflet-popup-tip { background: #1e1e24; }
@@ -126,11 +125,11 @@
     </div>
   </div>
 
-  <!-- Výběrové okno pro ruční polohu (Fallback) -->
+  <!-- Výběrové okno pro ruční polohu -->
   <div id="location-modal">
     <div class="modal-box">
       <h2>🌍 Poloha nedostupná</h2>
-      <p>Nepodařilo se načíst tvou GPS polohu (nebo j я ji nepovolil). Vyber si výchozí oblast manuálně, nebo zkus GPS zapnout:</p>
+      <p>Vyber si výchozí oblast manuálně, nebo zkus zapnout GPS:</p>
       <button class="city-btn gps-retry-btn" onclick="tryEnableGPS()">📍 Zapnout / Obnovit živou GPS</button>
       <button class="city-btn" onclick="setLocationManual(50.767, 15.056, 'Liberec')">Liberec</button>
       <button class="city-btn" onclick="setLocationManual(50.087, 14.421, 'Praha')">Praha</button>
@@ -141,10 +140,16 @@
   <div class="top-panel">
     <h1>Skycards MHD</h1>
     <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
+    
+    <!-- Cooldown počítačový panel -->
+    <div class="cooldown-panel" id="cooldown-display">
+      📡 Radar: <span class="cooldown-status-ready">Připraven k lovu</span>
+    </div>
+
     <div class="user-info" id="user-email-display">Přihlášen</div>
     <div class="action-links">
       <span class="logout-link" onclick="logout()">Odhlásit</span>
-      <span class="gps-switch-link" id="gps-toggle-btn" onclick="switchToLiveGPS()" style="display:none;">📍 Přepnout na živou GPS</span>
+      <span class="gps-switch-link" id="gps-toggle-btn" onclick="switchToLiveGPS()" style="display:none;">📍 Živá GPS</span>
     </div>
   </div>
 
@@ -165,11 +170,14 @@
     let currentUser = null;
     let userId = null;
     let lastCatchTime = 0;
+    const COOLDOWN_MS = 60000; // 1 minuta cooldown
+
     let watchId = null;
     let isManualLocation = false;
 
+    // Upravené poloměry: Viditelnost 100 km, Chytání 30 km
     const VISIBLE_RADIUS = 100000;
-    const CATCH_RADIUS = 50000;
+    const CATCH_RADIUS = 30000;
 
     const map = L.map('map').setView([50.087, 14.421], 8);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -194,6 +202,7 @@
         loadSavedCards();
         initGeolocation();
         setInterval(loadVehicles, 5000);
+        setInterval(updateCooldownDisplay, 1000); // Každou sekundu aktualizujeme stav radaru
       } else {
         document.getElementById('auth-overlay').style.display = 'flex';
       }
@@ -214,7 +223,6 @@
 
     function initGeolocation() {
       if (navigator.geolocation) {
-        // Zkusíme získat polohu, pokud uživatel do 6 sekund neodpoví nebo odmítne, ukážeme výběrové okno
         const gpsTimeout = setTimeout(() => {
           if (!userCoords) {
             document.getElementById('location-modal').style.display = 'flex';
@@ -263,7 +271,6 @@
 
     function updateUserPosition(lat, lng, isManual) {
       userCoords = { lat, lng };
-
       const popupText = isManual ? "<b>Ručně zvolená poloha</b>" : "<b>Tvoje živá GPS poloha</b>";
 
       if (!userMarker) {
@@ -272,30 +279,44 @@
         }).addTo(map).bindPopup(popupText);
 
         visibleCircle = L.circle([lat, lng], {
-          radius: VISIBLE_RADIUS, color: '#4facfe', fillColor: '#4facfe', fillOpacity: 0.05, weight: 1.5, dashArray: '6, 6'
+          radius: VISIBLE_RADIUS, color: '#4facfe', fillColor: '#4facfe', fillOpacity: 0.03, weight: 1.5, dashArray: '6, 6'
         }).addTo(map);
 
         catchCircle = L.circle([lat, lng], {
-          radius: CATCH_RADIUS, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 0.1, weight: 2
+          radius: CATCH_RADIUS, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 0.08, weight: 2
         }).addTo(map);
 
-        map.setView([lat, lng], 11);
+        map.setView([lat, lng], 10);
       } else {
         userMarker.setLatLng([lat, lng]).bindPopup(popupText);
         visibleCircle.setLatLng([lat, lng]);
         catchCircle.setLatLng([lat, lng]);
-        if (isManual) map.setView([lat, lng], 11);
+        if (isManual) map.setView([lat, lng], 10);
       }
     }
 
-    function getMarkerClass(type, isCaught) {
-      if (isCaught) return 'marker-caught';
+    // Výběr tajného emoji podle typu vozidla
+    function getVehicleEmoji(type) {
       const t = (type || '').toLowerCase();
-      if (t.includes('vlak') || t.includes('train')) return 'marker-train';
-      if (t.includes('autobus') || t.includes('bus')) return 'marker-bus';
-      if (t.includes('tram')) return 'marker-tram';
-      if (t.includes('metro')) return 'marker-metro';
-      return 'marker-other';
+      if (t.includes('vlak') || t.includes('train')) return '🚆';
+      if (t.includes('autobus') || t.includes('bus')) return '🚌';
+      if (t.includes('tram')) return '🚋';
+      if (t.includes('metro')) return '🚇';
+      return '🚐';
+    }
+
+    // Aktualizace UI panelu radaru a cooldownu
+    function updateCooldownDisplay() {
+      const now = Date.now();
+      const elapsed = now - lastCatchTime;
+      const panel = document.getElementById('cooldown-display');
+
+      if (elapsed >= COOLDOWN_MS) {
+        panel.innerHTML = `📡 Radar: <span class="cooldown-status-ready">Připraven k lovu</span>`;
+      } else {
+        const remainingSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+        panel.innerHTML = `📡 Radar nabíjím: <span class="cooldown-status-wait">${remainingSec}s</span>`;
+      }
     }
 
     async function loadSavedCards() {
@@ -332,31 +353,34 @@
           }
         });
 
-        vehicles.logo = vehicles.forEach?.() || vehicles.forEach(v => {
+        vehicles.forEach(v => {
           const isAlreadyCaught = caughtCards.some(c => c.reg_num === v.regNum);
-          const markerClass = getMarkerClass(v.type, isAlreadyCaught);
-          const delayClass = v.delay > 3 && !isAlreadyCaught ? 'has-delay' : '';
+          const emoji = getVehicleEmoji(v.type);
+          const caughtClass = isAlreadyCaught ? 'marker-caught-emoji' : '';
 
+          // Na mapě se ukáže POUZE tajemné emoji, žádné číslo linky!
           const icon = L.divIcon({
-            className: `vehicle-marker ${markerClass} ${delayClass}`,
-            html: `<span>${v.line}</span>`,
+            className: `vehicle-emoji-marker ${caughtClass}`,
+            html: `<span>${emoji}</span>`,
             iconSize: [28, 28]
           });
 
           const distKm = v.distanceMeters !== null ? (v.distanceMeters / 1000).toFixed(1) : null;
 
+          // Podrobnosti o lince se ukáží až po rozkliknutí v popup okénku
           const popupContent = `
-            <div style="text-align: center;">
-              <h3>Linka ${v.line}</h3>
+            <div style="text-align: center; min-width: 160px;">
+              <h3 style="color: #4facfe; margin-bottom: 5px;">Tajemný spoj</h3>
+              <p><b>Linka:</b> ${v.line}</p>
               <p><b>Typ:</b> ${v.type}</p>
-              <p><b>Ev. číslo / ID:</b> ${v.regNum}</p>
               <p><b>Cíl:</b> ${v.destination}</p>
+              <p><b>Ev. číslo:</b> ${v.regNum}</p>
               <p><b>Zpoždění:</b> ${v.delay !== null ? v.delay + ' min' : 'Neznámé'}</p>
               ${distKm !== null ? `<p><b>Vzdálenost:</b> ${distKm} km</p>` : ''}
-              ${v.photoUrl ? `<a href="${v.photoUrl}" target="_blank" class="photo-link">📷 Zobrazit fotogalerie</a>` : ''}
+              ${v.photoUrl ? `<a href="${v.photoUrl}" target="_blank" class="photo-link">📷 Fotogalerie</a>` : ''}
               <button class="popup-btn" ${!v.canCatch || isAlreadyCaught ? 'disabled' : ''} 
                 onclick="catchVehicle('${v.line}', '${v.type}', '${v.regNum}')">
-                ${isAlreadyCaught ? '✅ UŽ MÁŠ V ALBUMU' : (v.canCatch ? '🎴 CHYTIT KARTU' : '🔒 MOC DALEKO')}
+                ${isAlreadyCaught ? '✅ UŽ MÁŠ V ALBUMU' : (v.canCatch ? '🎴 CHYTIT KARTU' : '🔒 MOC DALEKO (>30km)')}
               </button>
             </div>
           `;
@@ -376,10 +400,8 @@
       if (!userId) return;
 
       const now = Date.now();
-      const cooldownTime = 60000;
-      if (now - lastCatchTime < cooldownTime) {
-        const remainingSec = Math.ceil((cooldownTime - (now - lastCatchTime)) / 1000);
-        alert(`⏳ Musíš chvíli počkat! Další kartu můžeš ulovit za ${remainingSec} sekund.`);
+      if (now - lastCatchTime < COOLDOWN_MS) {
+        alert(`⏳ Radar se ještě nabíjí! Počkej prosím do konce odpočtu.`);
         return;
       }
 
@@ -391,7 +413,7 @@
           ]);
 
         if (error) {
-          alert('⚠️ Tuto kartu už v albumu máš nebo došlo k chybě.');
+          alert('⚠️ Tuto kartu už v albu máš nebo došlo k chybě.');
           console.error(error);
           return;
         }
@@ -410,7 +432,7 @@
       document.getElementById('card-count').innerText = caughtCards.length;
 
       if (caughtCards.length === 0) {
-        list.innerHTML = '<div style="color: #888; font-size: 0.85rem;">Zatím nemáš žádnou kartu. Přibliž se k vozidlu na 50 km!</div>';
+        list.innerHTML = '<div style="color: #888; font-size: 0.85rem;">Zatím nemáš žádnou kartu. Najdi emoji na mapě a klikni na něj (dosah 30 km)!</div>';
         return;
       }
 
