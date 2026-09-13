@@ -139,7 +139,7 @@
 
   <div class="top-panel">
     <h1>Skycards MHD</h1>
-    <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
+    <div>Vozidel v okruhu (50 km): <span id="veh-count">0</span></div>
     
     <!-- Cooldown počítačový panel -->
     <div class="cooldown-panel" id="cooldown-display">
@@ -176,7 +176,7 @@
     let isManualLocation = false;
 
     // Upravené poloměry: Viditelnost 100 km, Chytání 30 km
-    const VISIBLE_RADIUS = 100000;
+    const VISIBLE_RADIUS = 50000;
     const CATCH_RADIUS = 30000;
 
     const map = L.map('map').setView([50.087, 14.421], 8);
