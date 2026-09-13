@@ -143,7 +143,7 @@
   <div id="loading-overlay" style="display: none;">
     <div class="loader-spinner"></div>
     <div class="loader-title" id="loader-status-text">Inicializuji satelitní radar...</div>
-    <div class="loader-subtitle">Vyhledávám polohu a okolní spoje (50 km)...</div>
+    <div class="loader-subtitle">Vyhledávám polohu a okolní spoje (100 km)...</div>
   </div>
 
   <!-- Výběrové okno pro ruční polohu -->
@@ -160,7 +160,7 @@
 
   <div class="top-panel">
     <h1>Skycards MHD</h1>
-    <div>Vozidel v okruhu (50 km): <span id="veh-count">0</span></div>
+    <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
     
     <div class="cooldown-panel" id="cooldown-display">
       📡 Radar: <span class="cooldown-status-ready">Připraven k lovu</span>
@@ -196,8 +196,8 @@
     let isManualLocation = false;
 
     // Upravené rozsahy: Viditelnost 50 km, Chytání 30 km
-    const VISIBLE_RADIUS = 50000;
-    const CATCH_RADIUS = 30000;
+    const VISIBLE_RADIUS = 100000;
+    const CATCH_RADIUS = 75000;
 
     let isInitialLoadDone = false;
 
