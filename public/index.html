@@ -13,7 +13,7 @@
     body, html { width: 100%; height: 100%; overflow: hidden; background: #121212; color: #fff; }
     #map { width: 100%; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
 
-    /* Auth Overlay (Auth Guard) */
+    /* Auth Guard Overlay */
     #auth-overlay {
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
       background: rgba(12, 12, 16, 0.95); backdrop-filter: blur(12px);
@@ -71,6 +71,9 @@
     .marker-metro { background: #2ecc71; }
     .marker-train { background: #3498db; }
     .marker-other { background: #9b59b6; }
+    /* Styl pro již chycené vozidlo na mapě – šedivý marker */
+    .marker-caught { background: #555555 !important; border-color: #888888 !important; opacity: 0.7; }
+
     .has-delay { animation: pulse 1.5s infinite; }
 
     @keyframes pulse {
@@ -85,13 +88,13 @@
       margin-top: 10px; width: 100%; padding: 8px; border: none; border-radius: 6px;
       background: #4facfe; color: white; font-weight: bold; cursor: pointer;
     }
-    .popup-btn:disabled { background: #555; cursor: not-allowed; }
+    .popup-btn:disabled { background: #444; color: #888; cursor: not-allowed; }
     .photo-link { display: block; margin-top: 8px; color: #00f2fe; text-decoration: none; font-size: 0.85rem; }
   </style>
 </head>
 <body>
 
-  <!-- Auth Guard Overlay (Zobrazeno dokud uživatel není přihlášen) -->
+  <!-- Auth Guard Overlay -->
   <div id="auth-overlay">
     <div class="auth-box">
       <h1>Skycards MHD</h1>
@@ -120,13 +123,13 @@
   <div id="map"></div>
 
   <script>
-    // Inicializace Supabase klienta
     const SUPABASE_URL = 'https://efogkwrmblvpkjrvslfh.supabase.co';
     const SUPABASE_ANON_KEY = 'sb_publishable_Cilnv9nc0q635CRPfnRrrA_SBclsI80';
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     let currentUser = null;
     let userId = null;
+    let lastCatchTime = 0; // Sledování času posledního chycení (cooldown 1 minuta)
 
     const VISIBLE_RADIUS = 100000;
     const CATCH_RADIUS = 50000;
@@ -143,7 +146,6 @@
     let visibleCircle = null;
     let catchCircle = null;
 
-    // Kontrola přihlášení při startu
     async function checkUserSession() {
       const { data: { session } } = await supabaseClient.auth.getSession();
       if (session) {
@@ -152,7 +154,6 @@
         document.getElementById('user-email-display').innerText = currentUser.email;
         document.getElementById('auth-overlay').style.display = 'none';
         
-        // Spustíme načítání dat
         loadSavedCards();
         loadVehicles();
         setInterval(loadVehicles, 5000);
@@ -164,9 +165,7 @@
     async function loginWithGoogle() {
       const { error } = await supabaseClient.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          redirectTo: window.location.origin
-        }
+        options: { redirectTo: window.location.origin }
       });
       if (error) alert('Chyba při přihlašování: ' + error.message);
     }
@@ -207,7 +206,8 @@
       );
     }
 
-    function getMarkerClass(type) {
+    function getMarkerClass(type, isCaught) {
+      if (isCaught) return 'marker-caught'; // Pokud už ho má, bude šedivý
       const t = (type || '').toLowerCase();
       if (t.includes('vlak') || t.includes('train')) return 'marker-train';
       if (t.includes('autobus') || t.includes('bus')) return 'marker-bus';
@@ -216,7 +216,6 @@
       return 'marker-other';
     }
 
-    // Načtení karet přímo z cloudové Supabase tabulky user_cards
     async function loadSavedCards() {
       if (!userId) return;
       try {
@@ -252,8 +251,9 @@
         });
 
         vehicles.forEach(v => {
-          const markerClass = getMarkerClass(v.type);
-          const delayClass = v.delay > 3 ? 'has-delay' : '';
+          const isAlreadyCaught = caughtCards.some(c => c.reg_num === v.regNum);
+          const markerClass = getMarkerClass(v.type, isAlreadyCaught);
+          const delayClass = v.delay > 3 && !isAlreadyCaught ? 'has-delay' : '';
 
           const icon = L.divIcon({
             className: `vehicle-marker ${markerClass} ${delayClass}`,
@@ -262,9 +262,6 @@
           });
 
           const distKm = v.distanceMeters !== null ? (v.distanceMeters / 1000).toFixed(1) : null;
-          
-          // Kontrola, zda už vozidlo s tímto regNum uživatel vlastní
-          const isAlreadyCaught = caughtCards.some(c => c.reg_num === v.regNum);
 
           const popupContent = `
             <div style="text-align: center;">
@@ -293,9 +290,19 @@
       }
     }
 
-    // Uložení karty rovnou do Supabase tabulky
+    // Uložení karty do Supabase s 1minutovým cooldownem
     window.catchVehicle = async function(line, type, regNum) {
       if (!userId) return;
+
+      // Kontrola 1minutového cooldownu (60 000 ms)
+      const now = Date.now();
+      const cooldownTime = 60000;
+      if (now - lastCatchTime < cooldownTime) {
+        const remainingSec = Math.ceil((cooldownTime - (now - lastCatchTime)) / 1000);
+        alert(`⏳ Musíš chvíli počkat! Další kartu můžeš ulovit za ${remainingSec} sekund.`);
+        return;
+      }
+
       try {
         const { error } = await supabaseClient
           .from('user_cards')
@@ -309,6 +316,7 @@
           return;
         }
 
+        lastCatchTime = Date.now(); // Zaznamenáme čas úspěšného úlovku
         alert(`🎉 Úspěšně jsi ulovil kartu linky ${line} (Ev.č. ${regNum})!`);
         await loadSavedCards();
         loadVehicles();
@@ -336,7 +344,6 @@
       `).join('');
     }
 
-    // Spuštění ověření sezení při načtení stránky
     checkUserSession();
   </script>
 </body>
