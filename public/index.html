@@ -140,7 +140,7 @@
   </div>
 
   <!-- Načítací obrazovka / Inicializace radaru -->
-  <div id="loading-overlay">
+  <div id="loading-overlay" style="display: none;">
     <div class="loader-spinner"></div>
     <div class="loader-title" id="loader-status-text">Inicializuji satelitní radar...</div>
     <div class="loader-subtitle">Vyhledávám polohu a okolní spoje (50 km)...</div>
@@ -220,6 +220,7 @@
         userId = currentUser.id;
         document.getElementById('user-email-display').innerText = currentUser.email;
         document.getElementById('auth-overlay').style.display = 'none';
+        document.getElementById('loading-overlay').style.display = 'flex';
         
         loadSavedCards();
         initGeolocation();
@@ -249,7 +250,7 @@
 
         const gpsTimeout = setTimeout(() => {
           if (!userCoords) {
-            document.getElementById('loading-overlay').style.display = 'none'; // Skryjeme loader, ať uživatel vidí modální okno
+            document.getElementById('loading-overlay').style.display = 'none';
             document.getElementById('location-modal').style.display = 'flex';
           }
         }, 6000);
@@ -324,7 +325,6 @@
         if (isManual) map.setView([lat, lng], 10);
       }
       
-      // Jakmile máme polohu, hned načteme vozidla
       loadVehicles();
     }
 
@@ -376,7 +376,6 @@
 
         document.getElementById('veh-count').innerText = vehicles.length;
 
-        // Úspěšně načteno -> skryjeme načítací obrazovku pokud ještě svítí
         if (!isInitialLoadDone) {
           isInitialLoadDone = true;
           const loader = document.getElementById('loading-overlay');
@@ -428,17 +427,8 @@
             markers[v.id] = L.marker([v.lat, v.lng], { icon }).addTo(map).bindPopup(popupContent);
           }
         });
-      } zmec (err) { // opraveno na catch
-        console.error('Chyba načítání dat:', err);
-      }
-    }
-
-    // Bezpečnostní úprava bloku catch (přepsání překlepu zminovaného v rychlosti)
-    async function safeLoadVehiclesWrapper() {
-      try {
-        await loadVehicles();
       } catch (err) {
-        console.error('Chyba:', err);
+        console.error('Chyba načítání dat:', err);
       }
     }
 
