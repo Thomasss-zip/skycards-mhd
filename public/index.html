@@ -6,10 +6,33 @@
   <title>Skycards MHD - Hra</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Supabase JS Client -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #121212; color: #fff; }
     #map { width: 100%; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+
+    /* Auth Overlay (Auth Guard) */
+    #auth-overlay {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(12, 12, 16, 0.95); backdrop-filter: blur(12px);
+      z-index: 9999; display: flex; align-items: center; justify-content: center;
+    }
+    .auth-box {
+      background: rgba(25, 25, 32, 0.9); padding: 40px; border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+      text-align: center; max-width: 400px; width: 90%;
+    }
+    .auth-box h1 { font-size: 2rem; margin-bottom: 10px; color: #4facfe; }
+    .auth-box p { color: #aaa; font-size: 0.95rem; margin-bottom: 25px; line-height: 1.5; }
+    .google-btn {
+      background: #ffffff; color: #333; border: none; padding: 12px 20px;
+      border-radius: 8px; font-weight: bold; font-size: 1rem; cursor: pointer;
+      width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2); transition: background 0.2s;
+    }
+    .google-btn:hover { background: #f0f0f0; }
 
     .top-panel {
       position: absolute; top: 15px; left: 15px; z-index: 1000;
@@ -18,6 +41,8 @@
       box-shadow: 0 8px 32px rgba(0,0,0,0.4);
     }
     .top-panel h1 { font-size: 1.2rem; margin-bottom: 4px; color: #4facfe; }
+    .user-info { font-size: 0.8rem; color: #aaa; margin-top: 4px; }
+    .logout-link { color: #ff5252; cursor: pointer; text-decoration: underline; font-size: 0.75rem; display: inline-block; margin-top: 2px; }
 
     .inventory-panel {
       position: absolute; top: 15px; right: 15px; z-index: 1000;
@@ -66,9 +91,23 @@
 </head>
 <body>
 
+  <!-- Auth Guard Overlay (Zobrazeno dokud uživatel není přihlášen) -->
+  <div id="auth-overlay">
+    <div class="auth-box">
+      <h1>Skycards MHD</h1>
+      <p>Pro vstup do hry a bezpečné ukládání tvých úlovků v cloudu se prosím přihlas.</p>
+      <button class="google-btn" onclick="loginWithGoogle()">
+        <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.63-.06-1.25-.19-1.84H9v3.49h4.84c-.21 1.12-.86 2.08-1.82 2.72v2.26h2.94c1.72-1.58 2.78-3.9 2.78-6.63z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.94-2.26c-.81.54-1.84.86-3.02.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33C2.46 15.83 5.48 18 9 18z"/><path fill="#FBBC05" d="M3.97 10.75c-.18-.54-.28-1.12-.28-1.75s.1-1.21.28-1.75V4.92H.96C.35 6.13 0 7.5 0 9s.35 2.87.96 4.08l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59C13.47.89 11.43 0 9 0 5.48 0 2.46 2.17.96 4.92l3.01 2.33c.71-2.13 2.69-3.67 5.03-3.67z"/></svg>
+        Přihlásit se přes Google
+      </button>
+    </div>
+  </div>
+
   <div class="top-panel">
     <h1>Skycards MHD</h1>
     <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
+    <div class="user-info" id="user-email-display">Přihlášen</div>
+    <span class="logout-link" onclick="logout()">Odhlásit se</span>
   </div>
 
   <div class="inventory-panel">
@@ -81,11 +120,13 @@
   <div id="map"></div>
 
   <script>
-    let userId = localStorage.getItem('skycards_user_id');
-    if (!userId) {
-      userId = 'user_' + Math.random().toString(36).substr(2, 9);
-      localStorage.setItem('skycards_user_id', userId);
-    }
+    // Inicializace Supabase klienta
+    const SUPABASE_URL = 'https://efogkwrmblvpkjrvslfh.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_Cilnv9nc0q635CRPfnRrrA_SBclsI80';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let currentUser = null;
+    let userId = null;
 
     const VISIBLE_RADIUS = 100000;
     const CATCH_RADIUS = 50000;
@@ -101,6 +142,39 @@
     let userMarker = null;
     let visibleCircle = null;
     let catchCircle = null;
+
+    // Kontrola přihlášení při startu
+    async function checkUserSession() {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session) {
+        currentUser = session.user;
+        userId = currentUser.id;
+        document.getElementById('user-email-display').innerText = currentUser.email;
+        document.getElementById('auth-overlay').style.display = 'none';
+        
+        // Spustíme načítání dat
+        loadSavedCards();
+        loadVehicles();
+        setInterval(loadVehicles, 5000);
+      } else {
+        document.getElementById('auth-overlay').style.display = 'flex';
+      }
+    }
+
+    async function loginWithGoogle() {
+      const { error } = await supabaseClient.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) alert('Chyba při přihlašování: ' + error.message);
+    }
+
+    async function logout() {
+      await supabaseClient.auth.signOut();
+      location.reload();
+    }
 
     function updateUserPosition(lat, lng) {
       userCoords = { lat, lng };
@@ -142,13 +216,20 @@
       return 'marker-other';
     }
 
+    // Načtení karet přímo z cloudové Supabase tabulky user_cards
     async function loadSavedCards() {
+      if (!userId) return;
       try {
-        const res = await fetch(`/api/cards/${userId}`);
-        caughtCards = await res.json();
+        const { data, error } = await supabaseClient
+          .from('user_cards')
+          .select('*')
+          .eq('user_id', userId);
+
+        if (error) throw error;
+        caughtCards = data || [];
         updateInventory();
       } catch (err) {
-        console.error('Chyba DB:', err);
+        console.error('Chyba načítání karet ze Supabase:', err);
       }
     }
 
@@ -182,8 +263,8 @@
 
           const distKm = v.distanceMeters !== null ? (v.distanceMeters / 1000).toFixed(1) : null;
           
-          // Kontrola, zda už stejné evidenční číslo v albu existuje
-          const isAlreadyCaught = caughtCards.some(c => c.reg_number === v.regNum);
+          // Kontrola, zda už vozidlo s tímto regNum uživatel vlastní
+          const isAlreadyCaught = caughtCards.some(c => c.reg_num === v.regNum);
 
           const popupContent = `
             <div style="text-align: center;">
@@ -193,9 +274,9 @@
               <p><b>Cíl:</b> ${v.destination}</p>
               <p><b>Zpoždění:</b> ${v.delay !== null ? v.delay + ' min' : 'Neznámé'}</p>
               ${distKm !== null ? `<p><b>Vzdálenost:</b> ${distKm} km</p>` : ''}
-              ${v.photoUrl ? `<a href="${v.photoUrl}" target="_blank" class="photo-link">📷 Zobrazit fotogalerii</a>` : ''}
+              ${v.photoUrl ? `<a href="${v.photoUrl}" target="_blank" class="photo-link">📷 Zobrazit fotogalerie</a>` : ''}
               <button class="popup-btn" ${!v.canCatch || isAlreadyCaught ? 'disabled' : ''} 
-                onclick="catchVehicle('${v.id}', '${v.line}', '${v.type}', '${v.regNum}', '${v.destination}', '${v.photoUrl || ''}')">
+                onclick="catchVehicle('${v.line}', '${v.type}', '${v.regNum}')">
                 ${isAlreadyCaught ? '✅ UŽ MÁŠ V ALBUMU' : (v.canCatch ? '🎴 CHYTIT KARTU' : '🔒 MOC DALEKO')}
               </button>
             </div>
@@ -212,22 +293,25 @@
       }
     }
 
-    window.catchVehicle = async function(id, line, type, regNum, destination, photoUrl) {
+    // Uložení karty rovnou do Supabase tabulky
+    window.catchVehicle = async function(line, type, regNum) {
+      if (!userId) return;
       try {
-        const res = await fetch('/api/cards', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, userId, line, type, regNum, destination, photoUrl })
-        });
+        const { error } = await supabaseClient
+          .from('user_cards')
+          .insert([
+            { user_id: userId, line: line, type: type, reg_num: regNum }
+          ]);
 
-        const data = await res.json();
-        if (res.ok) {
-          alert(`🎉 Úspěšně jsi ulovil kartu linky ${line} (Ev.č. ${regNum})!`);
-          await loadSavedCards();
-          loadVehicles();
-        } else {
-          alert(`⚠️ ${data.error}`);
+        if (error) {
+          alert('⚠️ Tuto kartu už v albumu máš nebo došlo k chybě.');
+          console.error(error);
+          return;
         }
+
+        alert(`🎉 Úspěšně jsi ulovil kartu linky ${line} (Ev.č. ${regNum})!`);
+        await loadSavedCards();
+        loadVehicles();
       } catch (err) {
         console.error('Chyba uložení:', err);
       }
@@ -245,17 +329,15 @@
       list.innerHTML = caughtCards.map(c => `
         <div class="card-item">
           <div>
-            <strong>Linka ${c.line}</strong> <small style="color:#4facfe">(Ev.č. ${c.reg_number})</small><br>
-            <small style="color:#aaa">${c.type} • ${c.destination}</small>
+            <strong>Linka ${c.line}</strong> <small style="color:#4facfe">(Ev.č. ${c.reg_num})</small><br>
+            <small style="color:#aaa">${c.type}</small>
           </div>
-          ${c.photo_url ? `<a href="${c.photo_url}" target="_blank">📷 Fotogalerie vozidla</a>` : ''}
         </div>
       `).join('');
     }
 
-    loadSavedCards();
-    loadVehicles();
-    setInterval(loadVehicles, 5000);
+    // Spuštění ověření sezení při načtení stránky
+    checkUserSession();
   </script>
 </body>
 </html>
