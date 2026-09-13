@@ -22,7 +22,7 @@
     .auth-box {
       background: rgba(25, 25, 32, 0.9); padding: 40px; border-radius: 16px;
       border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 16px 48px rgba(0,0,0,0.6);
-      text-align: center; max-width: 400px; width: 90%;
+      text-align: center; max-width: 420px; width: 90%;
     }
     .auth-box h1 { font-size: 2rem; margin-bottom: 10px; color: #4facfe; }
     .auth-box p { color: #aaa; font-size: 0.95rem; margin-bottom: 25px; line-height: 1.5; }
@@ -34,6 +34,28 @@
     }
     .google-btn:hover { background: #f0f0f0; }
 
+    /* Modální okno pro výběr polohy / fallback */
+    #location-modal {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(12, 12, 16, 0.9); backdrop-filter: blur(8px);
+      z-index: 9998; display: none; align-items: center; justify-content: center;
+    }
+    .modal-box {
+      background: rgba(25, 25, 32, 0.95); padding: 30px; border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+      text-align: center; max-width: 400px; width: 90%;
+    }
+    .modal-box h2 { font-size: 1.4rem; margin-bottom: 10px; color: #ffeb3b; }
+    .modal-box p { color: #aaa; font-size: 0.9rem; margin-bottom: 20px; line-height: 1.4; }
+    .city-btn {
+      background: #2a2a35; color: white; border: 1px solid #4facfe; padding: 10px;
+      border-radius: 8px; font-weight: bold; cursor: pointer; width: 100%; margin-bottom: 10px;
+      transition: background 0.2s;
+    }
+    .city-btn:hover { background: #4facfe; }
+    .gps-retry-btn { background: #2ecc71; border: none; }
+    .gps-retry-btn:hover { background: #27ae60; }
+
     .top-panel {
       position: absolute; top: 15px; left: 15px; z-index: 1000;
       background: rgba(20, 20, 25, 0.9); backdrop-filter: blur(8px);
@@ -42,7 +64,9 @@
     }
     .top-panel h1 { font-size: 1.2rem; margin-bottom: 4px; color: #4facfe; }
     .user-info { font-size: 0.8rem; color: #aaa; margin-top: 4px; }
-    .logout-link { color: #ff5252; cursor: pointer; text-decoration: underline; font-size: 0.75rem; display: inline-block; margin-top: 2px; }
+    .action-links { display: flex; gap: 10px; margin-top: 4px; font-size: 0.75rem; }
+    .logout-link { color: #ff5252; cursor: pointer; text-decoration: underline; }
+    .gps-switch-link { color: #2ecc71; cursor: pointer; text-decoration: underline; }
 
     .inventory-panel {
       position: absolute; top: 15px; right: 15px; z-index: 1000;
@@ -58,8 +82,6 @@
       display: flex; flex-direction: column; gap: 4px;
       border-left: 4px solid #4facfe; font-size: 0.85rem;
     }
-    .card-item a { color: #00f2fe; text-decoration: none; font-weight: bold; margin-top: 4px; display: inline-block; }
-    .card-item a:hover { text-decoration: underline; }
 
     .vehicle-marker {
       display: flex; align-items: center; justify-content: center;
@@ -71,9 +93,7 @@
     .marker-metro { background: #2ecc71; }
     .marker-train { background: #3498db; }
     .marker-other { background: #9b59b6; }
-    /* Styl pro již chycené vozidlo na mapě – šedivý marker */
     .marker-caught { background: #555555 !important; border-color: #888888 !important; opacity: 0.7; }
-
     .has-delay { animation: pulse 1.5s infinite; }
 
     @keyframes pulse {
@@ -106,11 +126,26 @@
     </div>
   </div>
 
+  <!-- Výběrové okno pro ruční polohu (Fallback) -->
+  <div id="location-modal">
+    <div class="modal-box">
+      <h2>🌍 Poloha nedostupná</h2>
+      <p>Nepodařilo se načíst tvou GPS polohu (nebo j я ji nepovolil). Vyber si výchozí oblast manuálně, nebo zkus GPS zapnout:</p>
+      <button class="city-btn gps-retry-btn" onclick="tryEnableGPS()">📍 Zapnout / Obnovit živou GPS</button>
+      <button class="city-btn" onclick="setLocationManual(50.767, 15.056, 'Liberec')">Liberec</button>
+      <button class="city-btn" onclick="setLocationManual(50.087, 14.421, 'Praha')">Praha</button>
+      <button class="city-btn" onclick="setLocationManual(50.444, 14.195, 'Lovosice')">Lovosice</button>
+    </div>
+  </div>
+
   <div class="top-panel">
     <h1>Skycards MHD</h1>
     <div>Vozidel v okruhu (100 km): <span id="veh-count">0</span></div>
     <div class="user-info" id="user-email-display">Přihlášen</div>
-    <span class="logout-link" onclick="logout()">Odhlásit se</span>
+    <div class="action-links">
+      <span class="logout-link" onclick="logout()">Odhlásit</span>
+      <span class="gps-switch-link" id="gps-toggle-btn" onclick="switchToLiveGPS()" style="display:none;">📍 Přepnout na živou GPS</span>
+    </div>
   </div>
 
   <div class="inventory-panel">
@@ -129,7 +164,9 @@
 
     let currentUser = null;
     let userId = null;
-    let lastCatchTime = 0; // Sledování času posledního chycení (cooldown 1 minuta)
+    let lastCatchTime = 0;
+    let watchId = null;
+    let isManualLocation = false;
 
     const VISIBLE_RADIUS = 100000;
     const CATCH_RADIUS = 50000;
@@ -155,7 +192,7 @@
         document.getElementById('auth-overlay').style.display = 'none';
         
         loadSavedCards();
-        loadVehicles();
+        initGeolocation();
         setInterval(loadVehicles, 5000);
       } else {
         document.getElementById('auth-overlay').style.display = 'flex';
@@ -175,13 +212,64 @@
       location.reload();
     }
 
-    function updateUserPosition(lat, lng) {
+    function initGeolocation() {
+      if (navigator.geolocation) {
+        // Zkusíme získat polohu, pokud uživatel do 6 sekund neodpoví nebo odmítne, ukážeme výběrové okno
+        const gpsTimeout = setTimeout(() => {
+          if (!userCoords) {
+            document.getElementById('location-modal').style.display = 'flex';
+          }
+        }, 6000);
+
+        watchId = navigator.geolocation.watchPosition(
+          pos => {
+            clearTimeout(gpsTimeout);
+            document.getElementById('location-modal').style.display = 'none';
+            if (!isManualLocation) {
+              updateUserPosition(pos.coords.latitude, pos.coords.longitude, false);
+            }
+          },
+          err => {
+            clearTimeout(gpsTimeout);
+            if (!userCoords) {
+              document.getElementById('location-modal').style.display = 'flex';
+            }
+          },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      } else {
+        document.getElementById('location-modal').style.display = 'flex';
+      }
+    }
+
+    function tryEnableGPS() {
+      isManualLocation = false;
+      document.getElementById('gps-toggle-btn').style.display = 'none';
+      initGeolocation();
+    }
+
+    function switchToLiveGPS() {
+      tryEnableGPS();
+    }
+
+    function setLocationManual(lat, lng, cityName) {
+      isManualLocation = true;
+      document.getElementById('location-modal').style.display = 'none';
+      document.getElementById('gps-toggle-btn').style.display = 'inline-block';
+      updateUserPosition(lat, lng, true);
+      alert(`📍 Nastavena ruční poloha: ${cityName}`);
+      loadVehicles();
+    }
+
+    function updateUserPosition(lat, lng, isManual) {
       userCoords = { lat, lng };
+
+      const popupText = isManual ? "<b>Ručně zvolená poloha</b>" : "<b>Tvoje živá GPS poloha</b>";
 
       if (!userMarker) {
         userMarker = L.circleMarker([lat, lng], {
-          radius: 8, fillColor: '#00f2fe', color: '#fff', weight: 3, fillOpacity: 1
-        }).addTo(map).bindPopup("<b>Tvoje poloha</b>");
+          radius: 8, fillColor: isManual ? '#f39c12' : '#00f2fe', color: '#fff', weight: 3, fillOpacity: 1
+        }).addTo(map).bindPopup(popupText);
 
         visibleCircle = L.circle([lat, lng], {
           radius: VISIBLE_RADIUS, color: '#4facfe', fillColor: '#4facfe', fillOpacity: 0.05, weight: 1.5, dashArray: '6, 6'
@@ -191,23 +279,17 @@
           radius: CATCH_RADIUS, color: '#2ecc71', fillColor: '#2ecc71', fillOpacity: 0.1, weight: 2
         }).addTo(map);
 
-        map.setView([lat, lng], 8);
+        map.setView([lat, lng], 11);
       } else {
-        userMarker.setLatLng([lat, lng]);
+        userMarker.setLatLng([lat, lng]).bindPopup(popupText);
         visibleCircle.setLatLng([lat, lng]);
         catchCircle.setLatLng([lat, lng]);
+        if (isManual) map.setView([lat, lng], 11);
       }
     }
 
-    if (navigator.geolocation) {
-      navigator.geolocation.watchPosition(
-        pos => updateUserPosition(pos.coords.latitude, pos.coords.longitude),
-        err => console.log('Geolokace nedostupná.')
-      );
-    }
-
     function getMarkerClass(type, isCaught) {
-      if (isCaught) return 'marker-caught'; // Pokud už ho má, bude šedivý
+      if (isCaught) return 'marker-caught';
       const t = (type || '').toLowerCase();
       if (t.includes('vlak') || t.includes('train')) return 'marker-train';
       if (t.includes('autobus') || t.includes('bus')) return 'marker-bus';
@@ -233,9 +315,9 @@
     }
 
     async function loadVehicles() {
+      if (!userCoords) return;
       try {
-        let url = '/api/vehicles';
-        if (userCoords) url += `?lat=${userCoords.lat}&lng=${userCoords.lng}&radius=${VISIBLE_RADIUS}`;
+        let url = `/api/vehicles?lat=${userCoords.lat}&lng=${userCoords.lng}&radius=${VISIBLE_RADIUS}`;
 
         const res = await fetch(url);
         const vehicles = await res.json();
@@ -250,7 +332,7 @@
           }
         });
 
-        vehicles.forEach(v => {
+        vehicles.logo = vehicles.forEach?.() || vehicles.forEach(v => {
           const isAlreadyCaught = caughtCards.some(c => c.reg_num === v.regNum);
           const markerClass = getMarkerClass(v.type, isAlreadyCaught);
           const delayClass = v.delay > 3 && !isAlreadyCaught ? 'has-delay' : '';
@@ -290,11 +372,9 @@
       }
     }
 
-    // Uložení karty do Supabase s 1minutovým cooldownem
     window.catchVehicle = async function(line, type, regNum) {
       if (!userId) return;
 
-      // Kontrola 1minutového cooldownu (60 000 ms)
       const now = Date.now();
       const cooldownTime = 60000;
       if (now - lastCatchTime < cooldownTime) {
@@ -316,7 +396,7 @@
           return;
         }
 
-        lastCatchTime = Date.now(); // Zaznamenáme čas úspěšného úlovku
+        lastCatchTime = Date.now();
         alert(`🎉 Úspěšně jsi ulovil kartu linky ${line} (Ev.č. ${regNum})!`);
         await loadSavedCards();
         loadVehicles();
